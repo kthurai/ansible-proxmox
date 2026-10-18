@@ -1,0 +1,36 @@
+---
+# One entry per OS you want to offer. Key = the value you pass as vm_os.
+# template_id must be unique and outside your normal VM range (9000+ is common).
+# Check image URLs occasionally - distros rename files on new releases.
+os_catalog:
+  debian13:
+    template_id: 9013
+    template_name: tmpl-debian13
+    image_url: https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2
+    pkg_mgr: apt
+
+  ubuntu2404:
+    template_id: 9024
+    template_name: tmpl-ubuntu2404
+    image_url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+    pkg_mgr: apt
+
+  rocky10:
+    template_id: 9110
+    template_name: tmpl-rocky10
+    image_url: https://dl.rockylinux.org/pub/rocky/10/images/x86_64/Rocky-10-GenericCloud-Base.latest.x86_64.qcow2
+    pkg_mgr: dnf
+
+  alma10:
+    template_id: 9210
+    template_name: tmpl-alma10
+    image_url: https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/AlmaLinux-10-GenericCloud-latest.x86_64.qcow2
+    pkg_mgr: dnf
+
+  fedora44:
+    template_id: 9344
+    template_name: tmpl-fedora44
+    # Fedora puts the build number in the filename - verify it under
+    # https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/
+    image_url: https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2
+    pkg_mgr: dnf

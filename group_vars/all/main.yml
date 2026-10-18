@@ -1,0 +1,21 @@
+---
+# ---- Proxmox API connection -------------------------------------------------
+pve_api_host: 192.168.4.10          # Proxmox host IP or FQDN
+pve_api_user: ansible@pve
+pve_api_token_id: automation        # token name (the part after the "!")
+# Secret comes from the environment (Jenkins credential) - never commit it.
+pve_api_token_secret: "{{ lookup('env', 'PVE_TOKEN_SECRET') }}"
+pve_validate_certs: false           # true once you have a trusted cert
+
+# ---- Cluster defaults ------------------------------------------------------
+pve_node: proxmox1                  # node name as shown in the Proxmox GUI
+pve_storage: local-lvm              # where VM disks live
+pve_disk_format: raw                # raw for LVM-thin/ZFS/Ceph; qcow2 for dir/NFS
+pve_bridge: vmbr0
+pve_image_dir: /var/lib/vz/template/cloudimg   # where cloud images are cached
+
+# ---- Cloud-init defaults for new VMs ---------------------------------------
+vm_ci_user: admin
+vm_ssh_pubkey_file: "~/.ssh/id_ed25519.pub"   # on the machine running Ansible
+vm_nameservers: "192.168.4.190 1.1.1.1"
+vm_searchdomain: 325haliburtonhts.com

@@ -1,0 +1,58 @@
+---
+- name: "{{ os.key }} | Check whether template {{ os.value.template_id }} exists"
+  ansible.builtin.command: qm status {{ os.value.template_id }}
+  register: tmpl_status
+  changed_when: false
+  failed_when: false
+
+- name: "{{ os.key }} | Destroy old template (rebuild=true)"
+  ansible.builtin.command: qm destroy {{ os.value.template_id }} --purge
+  when: tmpl_status.rc == 0 and (rebuild | bool)
+
+- name: "{{ os.key }} | Build template"
+  when: tmpl_status.rc != 0 or (rebuild | bool)
+  vars:
+    image_path: "{{ pve_image_dir }}/{{ os.key }}.qcow2"
+    tid: "{{ os.value.template_id }}"
+  block:
+    - name: "{{ os.key }} | Download cloud image"
+      ansible.builtin.get_url:
+        url: "{{ os.value.image_url }}"
+        dest: "{{ image_path }}"
+        mode: "0644"
+        force: "{{ rebuild | bool }}"
+
+    - name: "{{ os.key }} | Bake in qemu-guest-agent"
+      ansible.builtin.command: >
+        virt-customize -a {{ image_path }}
+        --install qemu-guest-agent
+        --run-command 'systemctl enable qemu-guest-agent'
+        --truncate /etc/machine-id
+      when: install_guest_agent | bool
+
+    - name: "{{ os.key }} | Create VM shell"
+      ansible.builtin.command: >
+        qm create {{ tid }}
+        --name {{ os.value.template_name }}
+        --ostype l26 --machine q35 --bios ovmf
+        --efidisk0 {{ pve_storage }}:0,efitype=4m,pre-enrolled-keys=0
+        --cpu host --cores 2 --memory 2048
+        --net0 virtio,bridge={{ pve_bridge }}
+        --scsihw virtio-scsi-single
+        --agent enabled=1,fstrim_cloned_disks=1
+        --serial0 socket --vga serial0
+
+    - name: "{{ os.key }} | Import disk"
+      ansible.builtin.command: >
+        qm set {{ tid }}
+        --scsi0 {{ pve_storage }}:0,import-from={{ image_path }},discard=on,ssd=1,iothread=1
+
+    - name: "{{ os.key }} | Add cloud-init drive and boot order"
+      ansible.builtin.command: >
+        qm set {{ tid }}
+        --ide2 {{ pve_storage }}:cloudinit
+        --boot order=scsi0
+        --ipconfig0 ip=dhcp
+
+    - name: "{{ os.key }} | Convert to template"
+      ansible.builtin.command: qm template {{ tid }}

@@ -1,0 +1,35 @@
+---
+#   ansible-playbook destroy_vm.yml -e vm_name=web01
+- name: Destroy VM on Proxmox
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  module_defaults:
+    community.proxmox.proxmox_kvm:
+      api_host: "{{ pve_api_host }}"
+      api_user: "{{ pve_api_user }}"
+      api_token_id: "{{ pve_api_token_id }}"
+      api_token_secret: "{{ pve_api_token_secret }}"
+      validate_certs: "{{ pve_validate_certs }}"
+      node: "{{ pve_node }}"
+
+  tasks:
+    - name: Refuse to touch templates
+      ansible.builtin.assert:
+        that:
+          - vm_name is defined
+          - not vm_name.startswith('tmpl-')
+        fail_msg: "Pass vm_name, and it can't be a template."
+
+    - name: Stop {{ vm_name }}
+      community.proxmox.proxmox_kvm:
+        name: "{{ vm_name }}"
+        state: stopped
+        force: true
+        timeout: 120
+
+    - name: Delete {{ vm_name }} and its disks
+      community.proxmox.proxmox_kvm:
+        name: "{{ vm_name }}"
+        state: absent

@@ -1,0 +1,121 @@
+---
+# Clone a VM from an OS template via the Proxmox API.
+#
+#   ansible-playbook create_vm.yml -e vm_name=web01 -e vm_os=debian13
+#   ansible-playbook create_vm.yml -e vm_name=db01 -e vm_os=rocky10 \
+#       -e vm_cores=4 -e vm_memory=8192 -e vm_disk_gb=60 \
+#       -e vm_ip=192.168.4.50/24 -e vm_gw=192.168.4.1
+- name: Create VM on Proxmox
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    vm_cores: 2
+    vm_memory: 2048          # MiB
+    vm_disk_gb: 20
+    vm_ip: dhcp              # or CIDR like 192.168.4.50/24 (then set vm_gw)
+    vm_gw: ""
+    vm_start: true
+    vm_ssh_pubkey: "{{ lookup('env', 'VM_SSH_PUBKEY') | default(lookup('file', vm_ssh_pubkey_file), true) }}"
+    pve_auth_header: "PVEAPIToken={{ pve_api_user }}!{{ pve_api_token_id }}={{ pve_api_token_secret }}"
+    pve_api_url: "https://{{ pve_api_host }}:8006/api2/json"
+
+  module_defaults:
+    community.proxmox.proxmox_kvm: &pve_auth
+      api_host: "{{ pve_api_host }}"
+      api_user: "{{ pve_api_user }}"
+      api_token_id: "{{ pve_api_token_id }}"
+      api_token_secret: "{{ pve_api_token_secret }}"
+      validate_certs: "{{ pve_validate_certs }}"
+    community.proxmox.proxmox_disk: *pve_auth
+
+  tasks:
+    - name: Validate input
+      ansible.builtin.assert:
+        that:
+          - vm_name is defined and vm_name | length > 0
+          - vm_os is defined and vm_os in os_catalog
+          - vm_ip == 'dhcp' or vm_gw | length > 0
+        fail_msg: >-
+          Need vm_name, vm_os (one of: {{ os_catalog.keys() | join(', ') }}),
+          and vm_gw when vm_ip is static.
+
+    - name: Get next free VMID
+      ansible.builtin.uri:
+        url: "{{ pve_api_url }}/cluster/nextid"
+        headers: { Authorization: "{{ pve_auth_header }}" }
+        validate_certs: "{{ pve_validate_certs }}"
+      register: nextid
+      when: vm_id is not defined
+
+    - name: Set VMID
+      ansible.builtin.set_fact:
+        new_vmid: "{{ vm_id | default(nextid.json.data) | int }}"
+
+    - name: Clone {{ os_catalog[vm_os].template_name }} -> {{ vm_name }} ({{ new_vmid }})
+      community.proxmox.proxmox_kvm:
+        node: "{{ pve_node }}"
+        vmid: "{{ os_catalog[vm_os].template_id }}"
+        clone: "{{ os_catalog[vm_os].template_name }}"
+        newid: "{{ new_vmid }}"
+        name: "{{ vm_name }}"
+        full: true
+        storage: "{{ pve_storage }}"
+        format: "{{ pve_disk_format }}"
+        timeout: 600
+
+    - name: Configure CPU, memory and cloud-init
+      community.proxmox.proxmox_kvm:
+        node: "{{ pve_node }}"
+        vmid: "{{ new_vmid }}"
+        update: true
+        cores: "{{ vm_cores }}"
+        memory: "{{ vm_memory }}"
+        ciuser: "{{ vm_ci_user }}"
+        sshkeys: "{{ vm_ssh_pubkey }}"
+        nameservers: "{{ vm_nameservers.split() }}"
+        searchdomains: ["{{ vm_searchdomain }}"]
+        ipconfig:
+          ipconfig0: "{{ 'ip=dhcp' if vm_ip == 'dhcp' else 'ip=' ~ vm_ip ~ ',gw=' ~ vm_gw }}"
+
+    - name: Resize disk to {{ vm_disk_gb }}G
+      community.proxmox.proxmox_disk:
+        vmid: "{{ new_vmid }}"
+        disk: scsi0
+        size: "{{ vm_disk_gb }}G"
+        state: resized
+
+    - name: Start VM
+      community.proxmox.proxmox_kvm:
+        node: "{{ pve_node }}"
+        vmid: "{{ new_vmid }}"
+        state: started
+      when: vm_start | bool
+
+    - name: Wait for guest agent to report an IP
+      ansible.builtin.uri:
+        url: "{{ pve_api_url }}/nodes/{{ pve_node }}/qemu/{{ new_vmid }}/agent/network-get-interfaces"
+        headers: { Authorization: "{{ pve_auth_header }}" }
+        validate_certs: "{{ pve_validate_certs }}"
+      register: agent
+      until: >-
+        agent.status == 200 and
+        (agent.json.data.result | map(attribute='ip-addresses', default=[]) | flatten
+         | selectattr('ip-address-type', 'eq', 'ipv4')
+         | rejectattr('ip-address', 'match', '^127\.') | list | length > 0)
+      retries: 30
+      delay: 10
+      failed_when: false
+      when: vm_start | bool
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "VM {{ vm_name }} (ID {{ new_vmid }}) from {{ vm_os }}"
+          - "IP: {{ (agent.json.data.result | map(attribute='ip-addresses', default=[]) | flatten
+                    | selectattr('ip-address-type', 'eq', 'ipv4')
+                    | rejectattr('ip-address', 'match', '^127\\.')
+                    | map(attribute='ip-address') | first)
+                   if (agent.json is defined and agent.status == 200) else 'not reported yet (check the VM in Proxmox)' }}"
+          - "Login: ssh {{ vm_ci_user }}@<ip>"

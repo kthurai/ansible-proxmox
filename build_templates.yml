@@ -1,0 +1,36 @@
+---
+# Builds a cloud-init template on the Proxmox host for each OS in os_catalog.
+# Runs once (or when you want fresh images). Re-running skips existing templates.
+#
+#   ansible-playbook build_templates.yml                      # all OSes
+#   ansible-playbook build_templates.yml -e only_os=debian13  # just one
+#   ansible-playbook build_templates.yml -e rebuild=true      # replace existing
+- name: Build Proxmox cloud-init templates
+  hosts: proxmox
+  become: false
+  gather_facts: false
+  vars:
+    rebuild: false
+    install_guest_agent: true
+    selected: "{{ os_catalog if only_os is not defined else {only_os: os_catalog[only_os]} }}"
+
+  tasks:
+    - name: Install libguestfs-tools (to bake qemu-guest-agent into images)
+      ansible.builtin.apt:
+        name: libguestfs-tools
+        state: present
+        update_cache: true
+      when: install_guest_agent | bool
+
+    - name: Ensure image cache directory exists
+      ansible.builtin.file:
+        path: "{{ pve_image_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Build each template
+      ansible.builtin.include_tasks: tasks/build_one_template.yml
+      loop: "{{ selected | dict2items }}"
+      loop_control:
+        loop_var: os
+        label: "{{ os.key }}"
