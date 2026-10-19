@@ -1,0 +1,115 @@
+---
+# Windows 11 template, in two phases (Windows has no cloud images, so the
+# install itself is done once by hand in the Proxmox console).
+#
+# 1) Prepare: creates a Win11-ready VM (UEFI, Secure Boot, TPM 2.0, VirtIO)
+#    with the Windows ISO and the VirtIO driver ISO attached, and starts it.
+#      ansible-playbook build_windows_template.yml -e win_iso='nfs-isos:iso/Win11_25H2_English_x64.iso'
+#
+# 2) Install Windows in the Proxmox console (steps are printed at the end),
+#    run sysprep, let it shut down. Then:
+#      ansible-playbook build_windows_template.yml -e phase=finalize
+- name: Build Windows 11 template
+  hosts: proxmox
+  gather_facts: false
+  vars:
+    phase: prepare
+    os_def: "{{ os_catalog.win11 }}"
+    tid: "{{ os_def.template_id }}"
+    virtio_url: https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
+    virtio_iso: local:iso/virtio-win.iso
+
+  tasks:
+    - name: Current state of VM {{ tid }}
+      ansible.builtin.command: qm config {{ tid }}
+      register: cfg
+      changed_when: false
+      failed_when: false
+
+    # ------------------------------------------------------------- prepare --
+    - name: Prepare
+      when: phase == 'prepare'
+      block:
+        - name: VM {{ tid }} must not exist yet
+          ansible.builtin.assert:
+            that: cfg.rc != 0
+            fail_msg: "VM {{ tid }} already exists. Destroy it first, or run -e phase=finalize."
+
+        - name: Need the Windows ISO volume
+          ansible.builtin.assert:
+            that: win_iso is defined
+            fail_msg: >-
+              Pass -e win_iso='<storage>:iso/<file>.iso', e.g. nfs-isos:iso/Win11_25H2_English_x64.iso
+              (Proxmox GUI -> storage -> ISO Images shows the names).
+
+        - name: Check the Windows ISO exists
+          ansible.builtin.command: pvesm path {{ win_iso }}
+          changed_when: false
+
+        - name: Download VirtIO driver ISO
+          ansible.builtin.get_url:
+            url: "{{ virtio_url }}"
+            dest: /var/lib/vz/template/iso/virtio-win.iso
+            mode: "0644"
+
+        - name: Create Windows 11 VM
+          ansible.builtin.command: >
+            qm create {{ tid }}
+            --name {{ os_def.template_name }}
+            --ostype win11 --machine q35 --bios ovmf
+            --efidisk0 {{ pve_storage }}:1,efitype=4m,pre-enrolled-keys=1
+            --tpmstate0 {{ pve_storage }}:1,version=v2.0
+            --cpu host --cores 4 --memory 8192
+            --scsihw virtio-scsi-single
+            --scsi0 {{ pve_storage }}:{{ os_def.min_disk_gb }},discard=on,ssd=1,iothread=1
+            --net0 virtio,bridge={{ pve_bridge }}
+            --ide2 {{ win_iso }},media=cdrom
+            --ide0 {{ virtio_iso }},media=cdrom
+            --boot order='ide2;scsi0'
+            --agent enabled=1
+            --vga std
+
+        - name: Start it
+          ansible.builtin.command: qm start {{ tid }}
+
+        - name: What to do now
+          ansible.builtin.debug:
+            msg:
+              - "Open Proxmox -> VM {{ tid }} ({{ os_def.template_name }}) -> Console. Press a key to boot the DVD."
+              - "1. 'Where do you want to install Windows?' is empty -> Load driver -> Browse ->"
+              - "   virtio CD -> vioscsi\\w11\\amd64 -> install. The disk appears."
+              - "2. Network: Load driver again -> NetKVM\\w11\\amd64 (or choose 'I don't have internet')."
+              - "3. Finish setup with a local account."
+              - "4. In Windows, open the virtio CD and run virtio-win-guest-tools.exe"
+              - "   (all drivers + QEMU guest agent). Install updates/apps you want in every clone."
+              - "5. Run as admin:  C:\\Windows\\System32\\Sysprep\\sysprep.exe /generalize /oobe /shutdown"
+              - "6. When the VM has stopped:  ansible-playbook build_windows_template.yml -e phase=finalize"
+
+    # ------------------------------------------------------------ finalize --
+    - name: Finalize
+      when: phase == 'finalize'
+      block:
+        - name: VM {{ tid }} must exist
+          ansible.builtin.assert:
+            that: cfg.rc == 0
+            fail_msg: "VM {{ tid }} not found - run the prepare phase first."
+
+        - name: Check it is stopped
+          ansible.builtin.command: qm status {{ tid }}
+          register: st
+          changed_when: false
+          failed_when: "'stopped' not in st.stdout"
+
+        - name: Detach install ISOs and boot from disk
+          ansible.builtin.command: "{{ item }}"
+          loop:
+            - qm set {{ tid }} --delete ide0
+            - qm set {{ tid }} --ide2 none,media=cdrom
+            - qm set {{ tid }} --boot order=scsi0
+
+        - name: Convert to template
+          ansible.builtin.command: qm template {{ tid }}
+
+        - name: Done
+          ansible.builtin.debug:
+            msg: "tmpl-win11 ready. Create VMs with: ansible-playbook create_vm.yml -e vm_name=win01 -e vm_os=win11"

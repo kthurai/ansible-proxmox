@@ -3,11 +3,13 @@
 Create Proxmox VMs for a chosen OS from cloud-init templates, from the CLI or Jenkins.
 
 ```
-build_templates.yml   one-time: downloads cloud images, builds tmpl-<os> templates (SSH to Proxmox)
+build_templates.yml   one-time: downloads cloud images, builds tmpl-<os> Linux templates (SSH to Proxmox)
+build_windows_template.yml  Windows 11 template (semi-manual, see below)
 create_vm.yml         clones a template, sets CPU/RAM/disk/IP, starts it (Proxmox API)
 destroy_vm.yml        stops and deletes a VM
 group_vars/all/main.yml         Proxmox host, storage, bridge, cloud-init defaults  <- edit this
 group_vars/all/os_catalog.yml   available OSes + template IDs + image URLs
+files/snippets/       cloud-init first-boot scripts (e.g. Fedora Workstation desktop)
 Jenkinsfile           parameterized create/destroy job
 setup-venv.sh         creates .venv + installs Ansible, proxmoxer, collections
 requirements.txt      Python packages for the venv
@@ -44,7 +46,7 @@ Copy the token **secret** it prints; it's shown only once.
 From any machine with SSH key access to `root@proxmox1`:
 
 ```bash
-ansible-playbook build_templates.yml                     # all OSes
+ansible-playbook build_templates.yml                     # all Linux OSes
 ansible-playbook build_templates.yml -e only_os=debian13 # just one
 ```
 
@@ -68,6 +70,40 @@ ansible-playbook create_vm.yml -e vm_name=db01 -e vm_os=rocky10 \
    - `vm-ssh-pubkey`: the SSH public key to put on new VMs
 4. **New Item → Pipeline**, then under *Pipeline script from SCM* point to the repo (script path `Jenkinsfile`).
 5. Run it once (it fails on the first run while Jenkins discovers the parameters), then use **Build with Parameters**.
+
+## Available OSes
+
+| vm_os | OS | Notes |
+|---|---|---|
+| debian13 | Debian 13 | |
+| ubuntu2404 / ubuntu2604 | Ubuntu 24.04 / 26.04 LTS | |
+| rhel10 | Red Hat Enterprise Linux 10.2 | image must be copied in manually (below) |
+| centos10 | CentOS Stream 10 | CentOS Linux is end-of-life |
+| rocky10 / alma10 | Rocky / AlmaLinux 10 | |
+| fedora44 | Fedora 44 Server (cloud) | |
+| fedora44ws | Fedora 44 Workstation (GNOME) | needs VM_PASSWORD; desktop installs on first boot (10-20 min) |
+| win11 | Windows 11 | template built by build_windows_template.yml |
+
+### RHEL 10.2
+
+Red Hat images need a (free) account, so they can't be downloaded automatically.
+
+1. Sign up for the free Red Hat Developer subscription, then download
+   **Red Hat Enterprise Linux 10.2 KVM Guest Image** (qcow2) from https://access.redhat.com/downloads.
+2. Copy it to proxmox1 as `/var/lib/vz/template/cloudimg/rhel10.qcow2`.
+3. `ansible-playbook build_templates.yml -e only_os=rhel10`
+4. In each new VM, register it: `sudo rhc connect` (or `sudo subscription-manager register`).
+
+### Windows 11
+
+1. Put a Windows 11 ISO on an ISO storage (e.g. your `nfs-isos` share).
+2. `ansible-playbook build_windows_template.yml -e win_iso='nfs-isos:iso/<file>.iso'`
+   creates VM 9611 with UEFI, Secure Boot, TPM 2.0 and the VirtIO driver ISO, and starts it.
+3. Install Windows in the Proxmox console; the playbook prints the steps
+   (load the `vioscsi` driver, install `virtio-win-guest-tools.exe`, run sysprep).
+4. After sysprep shuts it down: `ansible-playbook build_windows_template.yml -e phase=finalize`.
+5. Clones boot into Windows' first-run setup (OOBE) in the Proxmox console, where you create the account.
+   Each clone needs its own Windows licence/activation.
 
 ## Adding another OS
 

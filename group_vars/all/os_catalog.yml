@@ -1,36 +1,81 @@
 ---
-# One entry per OS you want to offer. Key = the value you pass as vm_os.
-# template_id must be unique and outside your normal VM range (9000+ is common).
-# Check image URLs occasionally - distros rename files on new releases.
+# One entry per OS you can pick as vm_os. Key = the value you pass.
+# template_id must be unique and outside your normal VM range (9000+).
+#
+# Fields:
+#   image_url        cloud image to download. Leave it out when the image can't be
+#                    downloaded anonymously (RHEL) - then place the file at
+#                    {{ pve_image_dir }}/<key>.qcow2 on Proxmox yourself.
+#   bake_agent       false = image already has qemu-guest-agent (or can't install
+#                    packages without a subscription). Default true.
+#   vga              Proxmox display. serial0 (default) for servers, virtio for desktops.
+#   vendor_snippet   cloud-init vendor-data file from files/snippets/, run on first boot.
+#   needs_password   true = creating a VM requires vm_password (desktop login).
+#   min_memory / min_disk_gb   floors applied when creating a VM (MiB / GB).
+#   type: windows    built by build_windows_template.yml instead (no cloud-init).
 os_catalog:
+  # ---- Debian / Ubuntu ------------------------------------------------------
   debian13:
     template_id: 9013
     template_name: tmpl-debian13
     image_url: https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2
-    pkg_mgr: apt
 
   ubuntu2404:
     template_id: 9024
     template_name: tmpl-ubuntu2404
     image_url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
-    pkg_mgr: apt
+
+  ubuntu2604:
+    template_id: 9026
+    template_name: tmpl-ubuntu2604
+    image_url: https://cloud-images.ubuntu.com/resolute/current/resolute-server-cloudimg-amd64.img
+
+  # ---- Red Hat family -------------------------------------------------------
+  rhel10:
+    template_id: 9510
+    template_name: tmpl-rhel10
+    # Not downloadable anonymously. Get "Red Hat Enterprise Linux 10.2 KVM Guest Image"
+    # from https://access.redhat.com/downloads (free Developer subscription), then on
+    # proxmox1:  cp rhel-10.2-x86_64-kvm.qcow2 /var/lib/vz/template/cloudimg/rhel10.qcow2
+    bake_agent: false
+
+  centos10:
+    template_id: 9410
+    template_name: tmpl-centos10
+    # CentOS Stream 10 (CentOS Linux itself is end-of-life)
+    image_url: https://cloud.centos.org/centos/10-stream/x86_64/images/CentOS-Stream-GenericCloud-10-latest.x86_64.qcow2
 
   rocky10:
     template_id: 9110
     template_name: tmpl-rocky10
     image_url: https://dl.rockylinux.org/pub/rocky/10/images/x86_64/Rocky-10-GenericCloud-Base.latest.x86_64.qcow2
-    pkg_mgr: dnf
 
   alma10:
     template_id: 9210
     template_name: tmpl-alma10
     image_url: https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/AlmaLinux-10-GenericCloud-latest.x86_64.qcow2
-    pkg_mgr: dnf
 
   fedora44:
     template_id: 9344
     template_name: tmpl-fedora44
-    # Fedora puts the build number in the filename - verify it under
-    # https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/
     image_url: https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2
-    pkg_mgr: dnf
+
+  # Fedora Cloud image + GNOME desktop installed by cloud-init on first boot
+  # (takes 10-20 min after the VM starts, then it reboots into the desktop).
+  fedora44ws:
+    template_id: 9345
+    template_name: tmpl-fedora44ws
+    image_url: https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2
+    vga: virtio
+    vendor_snippet: fedora-workstation.yaml
+    needs_password: true
+    min_memory: 4096
+    min_disk_gb: 30
+
+  # ---- Windows (see build_windows_template.yml) -----------------------------
+  win11:
+    type: windows
+    template_id: 9611
+    template_name: tmpl-win11
+    min_memory: 4096
+    min_disk_gb: 64

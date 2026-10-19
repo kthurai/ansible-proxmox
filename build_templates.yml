@@ -1,8 +1,8 @@
 ---
-# Builds a cloud-init template on the Proxmox host for each OS in os_catalog.
-# Runs once (or when you want fresh images). Re-running skips existing templates.
+# Builds a cloud-init template on the Proxmox host for each Linux OS in os_catalog.
+# Re-running skips templates that already exist. Windows: build_windows_template.yml.
 #
-#   ansible-playbook build_templates.yml                      # all OSes
+#   ansible-playbook build_templates.yml                      # all Linux OSes
 #   ansible-playbook build_templates.yml -e only_os=debian13  # just one
 #   ansible-playbook build_templates.yml -e rebuild=true      # replace existing
 - name: Build Proxmox cloud-init templates
@@ -11,16 +11,22 @@
   gather_facts: false
   vars:
     rebuild: false
-    install_guest_agent: true
-    selected: "{{ os_catalog if only_os is not defined else {only_os: os_catalog[only_os]} }}"
+    pve_snippet_storage: local
+    pve_snippet_dir: /var/lib/vz/snippets
+    wanted: "{{ os_catalog if only_os is not defined else {only_os: os_catalog[only_os]} }}"
+    selected: "{{ wanted | dict2items | rejectattr('value.type', 'defined') | list }}"
 
   tasks:
+    - name: Refuse Windows here
+      ansible.builtin.assert:
+        that: selected | length > 0
+        fail_msg: "{{ only_os | default('') }} is a Windows entry - use build_windows_template.yml"
+
     - name: Install libguestfs-tools (to bake qemu-guest-agent into images)
       ansible.builtin.apt:
         name: libguestfs-tools
         state: present
         update_cache: true
-      when: install_guest_agent | bool
 
     - name: Ensure image cache directory exists
       ansible.builtin.file:
@@ -28,9 +34,31 @@
         state: directory
         mode: "0755"
 
+    - name: Cloud-init snippets
+      when: selected | selectattr('value.vendor_snippet', 'defined') | list | length > 0
+      block:
+        - name: Allow snippets on '{{ pve_snippet_storage }}' storage
+          ansible.builtin.shell: |
+            c=$(pvesh get /storage/{{ pve_snippet_storage }} --output-format json | python3 -c 'import sys,json; print(json.load(sys.stdin)["content"])')
+            case ",$c," in
+              *,snippets,*) echo unchanged ;;
+              *) pvesm set {{ pve_snippet_storage }} --content "$c,snippets" && echo changed ;;
+            esac
+          register: snip
+          changed_when: "'changed' in snip.stdout"
+
+        - name: Copy snippet files
+          ansible.builtin.copy:
+            src: "files/snippets/{{ item.value.vendor_snippet }}"
+            dest: "{{ pve_snippet_dir }}/{{ item.value.vendor_snippet }}"
+            mode: "0644"
+          loop: "{{ selected | selectattr('value.vendor_snippet', 'defined') | list }}"
+          loop_control:
+            label: "{{ item.value.vendor_snippet }}"
+
     - name: Build each template
       ansible.builtin.include_tasks: tasks/build_one_template.yml
-      loop: "{{ selected | dict2items }}"
+      loop: "{{ selected }}"
       loop_control:
         loop_var: os
         label: "{{ os.key }}"

@@ -3,13 +3,14 @@ pipeline {
 
   parameters {
     choice(name: 'ACTION', choices: ['create', 'destroy'], description: 'What to do')
-    choice(name: 'VM_OS', choices: ['debian13', 'ubuntu2404', 'rocky10', 'alma10', 'fedora44'], description: 'OS template (create only)')
+    choice(name: 'VM_OS', choices: ['debian13', 'ubuntu2404', 'ubuntu2604', 'rhel10', 'centos10', 'rocky10', 'alma10', 'fedora44', 'fedora44ws', 'win11'], description: 'OS template (create only)')
     string(name: 'VM_NAME', defaultValue: '', description: 'VM name, e.g. web01')
     string(name: 'VM_CORES', defaultValue: '2')
     string(name: 'VM_MEMORY', defaultValue: '2048', description: 'MiB')
     string(name: 'VM_DISK_GB', defaultValue: '20')
-    string(name: 'VM_IP', defaultValue: 'dhcp', description: "'dhcp' or CIDR, e.g. 192.168.4.50/24")
+    string(name: 'VM_IP', defaultValue: 'dhcp', description: "'dhcp' or CIDR, e.g. 192.168.5.80/23")
     string(name: 'VM_GW', defaultValue: '', description: 'Gateway (static IP only)')
+    password(name: 'VM_PASSWORD', defaultValue: '', description: "Password for the VM user (required for fedora44ws; optional otherwise)")
   }
 
   environment {

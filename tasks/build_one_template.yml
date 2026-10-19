@@ -21,6 +21,20 @@
         dest: "{{ image_path }}"
         mode: "0644"
         force: "{{ rebuild | bool }}"
+      when: os.value.image_url is defined
+
+    - name: "{{ os.key }} | Check manually supplied image"
+      ansible.builtin.stat:
+        path: "{{ image_path }}"
+      register: img
+      when: os.value.image_url is not defined
+
+    - name: "{{ os.key }} | Image missing"
+      ansible.builtin.fail:
+        msg: >-
+          {{ os.key }} has no download URL. Download the image yourself and copy it to
+          {{ image_path }} on {{ inventory_hostname }} (see the comment in os_catalog.yml).
+      when: os.value.image_url is not defined and not img.stat.exists
 
     - name: "{{ os.key }} | Bake in qemu-guest-agent"
       ansible.builtin.command: >
@@ -28,7 +42,7 @@
         --install qemu-guest-agent
         --run-command 'systemctl enable qemu-guest-agent'
         --truncate /etc/machine-id
-      when: install_guest_agent | bool
+      when: os.value.bake_agent | default(true) | bool
 
     - name: "{{ os.key }} | Create VM shell"
       ansible.builtin.command: >
@@ -36,11 +50,11 @@
         --name {{ os.value.template_name }}
         --ostype l26 --machine q35 --bios ovmf
         --efidisk0 {{ pve_storage }}:0,efitype=4m,pre-enrolled-keys=0
-        --cpu host --cores 2 --memory 2048
+        --cpu host --cores 2 --memory {{ os.value.min_memory | default(2048) }}
         --net0 virtio,bridge={{ pve_bridge }}
         --scsihw virtio-scsi-single
         --agent enabled=1,fstrim_cloned_disks=1
-        --serial0 socket --vga serial0
+        --serial0 socket --vga {{ os.value.vga | default('serial0') }}
 
     - name: "{{ os.key }} | Import disk"
       ansible.builtin.command: >
@@ -53,6 +67,11 @@
         --ide2 {{ pve_storage }}:cloudinit
         --boot order=scsi0
         --ipconfig0 ip=dhcp
+
+    - name: "{{ os.key }} | Attach first-boot vendor-data"
+      ansible.builtin.command: >
+        qm set {{ tid }} --cicustom vendor={{ pve_snippet_storage }}:snippets/{{ os.value.vendor_snippet }}
+      when: os.value.vendor_snippet is defined
 
     - name: "{{ os.key }} | Convert to template"
       ansible.builtin.command: qm template {{ tid }}
