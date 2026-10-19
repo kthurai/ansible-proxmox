@@ -104,8 +104,10 @@ Red Hat images need a (free) account, so they can't be downloaded automatically.
 3. Install Windows in the Proxmox console; the playbook prints the steps
    (load the `vioscsi` driver, install `virtio-win-guest-tools.exe`, run sysprep).
 4. After sysprep shuts it down: `ansible-playbook build_windows_template.yml -e phase=finalize`.
-5. Clones boot into Windows' first-run setup (OOBE) in the Proxmox console, where you create the account.
-   Each clone needs its own Windows licence/activation.
+5. With `files/windows/unattend.xml` (the sysprep step downloads it), clones keep your account, get a
+   random computer name and boot straight to the login screen. Each clone needs its own Windows licence.
+6. To re-make the template from another VM (e.g. a clone you updated and sysprepped):
+   `ansible-playbook build_windows_template.yml -e phase=finalize -e from_vmid=<id>`
 
 ## Adding another OS
 

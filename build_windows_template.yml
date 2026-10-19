@@ -9,6 +9,10 @@
 # 2) Install Windows in the Proxmox console (steps are printed at the end),
 #    run sysprep, let it shut down. Then:
 #      ansible-playbook build_windows_template.yml -e phase=finalize
+#
+# Re-template from another VM (e.g. a clone you fixed up and sysprepped with
+# files/windows/unattend.xml). Replaces tmpl-win11 with a copy of VM <id>:
+#      ansible-playbook build_windows_template.yml -e phase=finalize -e from_vmid=<id>
 - name: Build Windows 11 template
   hosts: proxmox
   gather_facts: false
@@ -18,6 +22,7 @@
     tid: "{{ os_def.template_id }}"
     virtio_url: https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
     virtio_iso: local:iso/virtio-win.iso
+    unattend_url: https://raw.githubusercontent.com/kthurai/ansible-proxmox/main/files/windows/unattend.xml
 
   tasks:
     - name: Current state of VM {{ tid }}
@@ -82,34 +87,50 @@
               - "3. Finish setup with a local account."
               - "4. In Windows, open the virtio CD and run virtio-win-guest-tools.exe"
               - "   (all drivers + QEMU guest agent). Install updates/apps you want in every clone."
-              - "5. Run as admin:  C:\\Windows\\System32\\Sysprep\\sysprep.exe /generalize /oobe /shutdown"
+              - "5. PowerShell as admin (downloads the answer file, then sysprep):"
+              - "   iwr {{ unattend_url }} -OutFile C:\\Windows\\System32\\Sysprep\\unattend.xml"
+              - "   C:\\Windows\\System32\\Sysprep\\sysprep.exe /generalize /oobe /shutdown /unattend:C:\\Windows\\System32\\Sysprep\\unattend.xml"
               - "6. When the VM has stopped:  ansible-playbook build_windows_template.yml -e phase=finalize"
 
     # ------------------------------------------------------------ finalize --
     - name: Finalize
       when: phase == 'finalize'
+      vars:
+        src: "{{ from_vmid | default(tid) }}"
       block:
-        - name: VM {{ tid }} must exist
-          ansible.builtin.assert:
-            that: cfg.rc == 0
-            fail_msg: "VM {{ tid }} not found - run the prepare phase first."
+        - name: Source VM {{ src }} must exist
+          ansible.builtin.command: qm config {{ src }}
+          changed_when: false
 
-        - name: Check it is stopped
-          ansible.builtin.command: qm status {{ tid }}
+        - name: Check it is stopped (sysprep shuts it down)
+          ansible.builtin.command: qm status {{ src }}
           register: st
           changed_when: false
           failed_when: "'stopped' not in st.stdout"
 
+        - name: Replace the old template with a copy of VM {{ src }}
+          when: src | string != tid | string
+          block:
+            - name: Remove old {{ os_def.template_name }} ({{ tid }})
+              ansible.builtin.command: qm destroy {{ tid }} --purge
+              when: cfg.rc == 0
+
+            - name: Full-clone VM {{ src }} to {{ tid }}
+              ansible.builtin.command: >
+                qm clone {{ src }} {{ tid }} --name {{ os_def.template_name }}
+                --full 1 --storage {{ pve_storage }}
+
         - name: Detach install ISOs and boot from disk
-          ansible.builtin.command: "{{ item }}"
-          loop:
-            - qm set {{ tid }} --delete ide0
-            - qm set {{ tid }} --ide2 none,media=cdrom
-            - qm set {{ tid }} --boot order=scsi0
+          ansible.builtin.shell: |
+            qm config {{ tid }} | grep -q '^ide0:' && qm set {{ tid }} --delete ide0 || true
+            qm config {{ tid }} | grep -q '^ide2:' && qm set {{ tid }} --ide2 none,media=cdrom || true
+            qm set {{ tid }} --boot order=scsi0
 
         - name: Convert to template
           ansible.builtin.command: qm template {{ tid }}
 
         - name: Done
           ansible.builtin.debug:
-            msg: "tmpl-win11 ready. Create VMs with: ansible-playbook create_vm.yml -e vm_name=win01 -e vm_os=win11"
+            msg:
+              - "{{ os_def.template_name }} ready. Create VMs with: ansible-playbook create_vm.yml -e vm_name=win01 -e vm_os=win11"
+              - "{{ 'VM ' ~ src ~ ' was copied, not changed - delete it in Proxmox when you no longer need it.' if src | string != tid | string else '' }}"
