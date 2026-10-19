@@ -9,8 +9,36 @@
   ansible.builtin.command: qm destroy {{ os.value.template_id }} --purge
   when: tmpl_status.rc == 0 and (rebuild | bool)
 
+- name: "{{ os.key }} | Check manually supplied image"
+  ansible.builtin.stat:
+    path: "{{ pve_image_dir }}/{{ os.key }}.qcow2"
+  register: img
+  when: os.value.image_url is not defined
+
+- name: "{{ os.key }} | Note whether a manual image is missing"
+  ansible.builtin.set_fact:
+    manual_image_missing: "{{ os.value.image_url is not defined and not img.stat.exists }}"
+
+- name: "{{ os.key }} | Image missing"
+  vars:
+    missing_msg: >-
+      SKIPPED {{ os.key }}: it has no download URL. Download the image yourself and copy it to
+      {{ pve_image_dir }}/{{ os.key }}.qcow2 on {{ inventory_hostname }} (see os_catalog.yml),
+      then run: ansible-playbook build_templates.yml -e only_os={{ os.key }}
+  ansible.builtin.fail:
+    msg: "{{ missing_msg }}"
+  # Building just this OS -> stop with an error. Building everything -> warn and move on.
+  when: manual_image_missing | bool and (tmpl_status.rc != 0 or (rebuild | bool)) and only_os is defined
+
+- name: "{{ os.key }} | Image missing (continuing with the other OSes)"
+  ansible.builtin.debug:
+    msg: >-
+      SKIPPED {{ os.key }}: copy its image to {{ pve_image_dir }}/{{ os.key }}.qcow2 on
+      {{ inventory_hostname }}, then run: ansible-playbook build_templates.yml -e only_os={{ os.key }}
+  when: manual_image_missing | bool and (tmpl_status.rc != 0 or (rebuild | bool)) and only_os is not defined
+
 - name: "{{ os.key }} | Build template"
-  when: tmpl_status.rc != 0 or (rebuild | bool)
+  when: (tmpl_status.rc != 0 or (rebuild | bool)) and not (manual_image_missing | bool)
   vars:
     image_path: "{{ pve_image_dir }}/{{ os.key }}.qcow2"
     tid: "{{ os.value.template_id }}"
@@ -22,19 +50,6 @@
         mode: "0644"
         force: "{{ rebuild | bool }}"
       when: os.value.image_url is defined
-
-    - name: "{{ os.key }} | Check manually supplied image"
-      ansible.builtin.stat:
-        path: "{{ image_path }}"
-      register: img
-      when: os.value.image_url is not defined
-
-    - name: "{{ os.key }} | Image missing"
-      ansible.builtin.fail:
-        msg: >-
-          {{ os.key }} has no download URL. Download the image yourself and copy it to
-          {{ image_path }} on {{ inventory_hostname }} (see the comment in os_catalog.yml).
-      when: os.value.image_url is not defined and not img.stat.exists
 
     - name: "{{ os.key }} | Bake in qemu-guest-agent"
       ansible.builtin.command: >
