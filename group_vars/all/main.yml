@@ -1,6 +1,6 @@
 ---
 # ---- Proxmox API connection -------------------------------------------------
-pve_api_host: 192.168.4.10          # Proxmox host IP or FQDN
+pve_api_host: 192.168.5.75          # Proxmox host IP or FQDN
 pve_api_user: ansible@pve
 pve_api_token_id: automation        # token name (the part after the "!")
 # Secret comes from the environment (Jenkins credential) - never commit it.

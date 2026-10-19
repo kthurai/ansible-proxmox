@@ -55,14 +55,14 @@ export PVE_TOKEN_SECRET='xxxxxxxx-xxxx-...'
 ansible-playbook create_vm.yml -e vm_name=web01 -e vm_os=debian13
 ansible-playbook create_vm.yml -e vm_name=db01 -e vm_os=rocky10 \
   -e vm_cores=4 -e vm_memory=8192 -e vm_disk_gb=60 \
-  -e vm_ip=192.168.4.50/24 -e vm_gw=192.168.4.1
+  -e vm_ip=192.168.5.80/23 -e vm_gw=192.168.4.1
 ```
 
 ## 4. Jenkins
 
 1. On the Jenkins server: `sudo dnf install -y git python3` (the job builds its own venv).
 2. Give the `jenkins` user SSH access to Proxmox (needed for template builds):
-   `sudo -u jenkins ssh-keygen -t ed25519 -N "" -f /var/lib/jenkins/.ssh/id_ed25519 && sudo -u jenkins ssh-copy-id root@192.168.4.10`
+   `sudo -u jenkins ssh-keygen -t ed25519 -N "" -f /var/lib/jenkins/.ssh/id_ed25519 && sudo -u jenkins ssh-copy-id root@192.168.5.75`
 3. **Manage Jenkins → Credentials → System → Global**, add two *Secret text* credentials:
    - `pve-token-secret`: the Proxmox token secret
    - `vm-ssh-pubkey`: the SSH public key to put on new VMs
