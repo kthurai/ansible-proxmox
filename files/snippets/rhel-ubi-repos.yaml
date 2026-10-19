@@ -17,5 +17,7 @@ yum_repos:
     gpgcheck: true
     gpgkey: file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release
 runcmd:
-  # --nobest: skip packages UBI only partly ships (NetworkManager, dracut, sudo plugins)
-  - [sh, -c, "dnf -y update --nobest || true"]
+  # best=False makes plain 'dnf update' skip packages UBI only partly ships
+  # (NetworkManager, dracut, sudo plugins) instead of failing.
+  - [sh, -c, "grep -q '^best=' /etc/dnf/dnf.conf && sed -i 's/^best=.*/best=False/' /etc/dnf/dnf.conf || echo 'best=False' >> /etc/dnf/dnf.conf"]
+  - [sh, -c, "dnf -y update || true"]
