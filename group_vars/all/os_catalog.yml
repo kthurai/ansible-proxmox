@@ -10,6 +10,8 @@
 #                    packages without a subscription). Default true.
 #   vga              Proxmox display. serial0 (default) for servers, virtio for desktops.
 #   vendor_snippet   cloud-init vendor-data file from files/snippets/, run on first boot.
+#   ciupgrade        false = don't let Proxmox's cloud-init run a full package upgrade
+#                    on first boot (default true).
 #   needs_password   true = creating a VM requires vm_password (desktop login).
 #   min_memory / min_disk_gb   floors applied when creating a VM (MiB / GB).
 #   type: windows    built by build_windows_template.yml instead (no cloud-init).
@@ -38,6 +40,10 @@ os_catalog:
     # from https://access.redhat.com/downloads (free Developer subscription), then on
     # proxmox1:  cp rhel-10.2-x86_64-kvm.qcow2 /var/lib/vz/template/cloudimg/rhel10.qcow2
     bake_agent: false
+    # Unregistered RHEL has no repos: add Red Hat's public UBI repos at first boot
+    # and update with --nobest. Delete these two lines if you register your VMs.
+    vendor_snippet: rhel-ubi-repos.yaml
+    ciupgrade: false
 
   centos10:
     template_id: 9410

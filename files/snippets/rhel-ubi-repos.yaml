@@ -1,0 +1,21 @@
+#cloud-config
+# Vendor-data for tmpl-rhel10: use Red Hat's public UBI repositories so dnf
+# works without registering. UBI is a SUBSET of RHEL (no kernel updates, some
+# packages missing). Register instead for full repos:
+#   sudo subscription-manager register --username <login>
+yum_repos:
+  ubi-10-baseos:
+    name: UBI 10 BaseOS
+    baseurl: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/$basearch/baseos/os
+    enabled: true
+    gpgcheck: true
+    gpgkey: file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release
+  ubi-10-appstream:
+    name: UBI 10 AppStream
+    baseurl: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/$basearch/appstream/os
+    enabled: true
+    gpgcheck: true
+    gpgkey: file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release
+runcmd:
+  # --nobest: skip packages UBI only partly ships (NetworkManager, dracut, sudo plugins)
+  - [sh, -c, "dnf -y update --nobest || true"]

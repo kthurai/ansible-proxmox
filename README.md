@@ -92,7 +92,9 @@ Red Hat images need a (free) account, so they can't be downloaded automatically.
    **Red Hat Enterprise Linux 10.2 KVM Guest Image** (qcow2) from https://access.redhat.com/downloads.
 2. Copy it to proxmox1 as `/var/lib/vz/template/cloudimg/rhel10.qcow2`.
 3. `ansible-playbook build_templates.yml -e only_os=rhel10`
-4. In each new VM, register it: `sudo rhc connect` (or `sudo subscription-manager register`).
+4. New RHEL VMs get Red Hat's public **UBI** repositories at first boot (no registration) and run
+   `dnf update --nobest`. UBI is a subset of RHEL: no kernel updates and some packages missing.
+   For the full repositories, register instead: `sudo subscription-manager register --username <login>`.
 
 ### Windows 11
 

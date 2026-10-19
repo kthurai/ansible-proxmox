@@ -88,5 +88,9 @@
         qm set {{ tid }} --cicustom vendor={{ pve_snippet_storage }}:snippets/{{ os.value.vendor_snippet }}
       when: os.value.vendor_snippet is defined
 
+    - name: "{{ os.key }} | Disable Proxmox first-boot package upgrade"
+      ansible.builtin.command: qm set {{ tid }} --ciupgrade 0
+      when: not (os.value.ciupgrade | default(true) | bool)
+
     - name: "{{ os.key }} | Convert to template"
       ansible.builtin.command: qm template {{ tid }}
