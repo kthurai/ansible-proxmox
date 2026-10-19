@@ -87,10 +87,13 @@
               - "3. Finish setup with a local account."
               - "4. In Windows, open the virtio CD and run virtio-win-guest-tools.exe"
               - "   (all drivers + QEMU guest agent). Install updates/apps you want in every clone."
-              - "5. PowerShell as admin (downloads the answer file, then sysprep):"
+              - "5. PowerShell as admin - turn off automatic drive encryption (sysprep refuses to run with BitLocker on):"
+              - "   reg add HKLM\\SYSTEM\\CurrentControlSet\\Control\\BitLocker /v PreventDeviceEncryption /t REG_DWORD /d 1 /f"
+              - "   manage-bde -off C:    (wait until 'manage-bde -status C:' shows Fully Decrypted)"
+              - "6. Then download the answer file and sysprep:"
               - "   iwr {{ unattend_url }} -OutFile C:\\Windows\\System32\\Sysprep\\unattend.xml"
               - "   C:\\Windows\\System32\\Sysprep\\sysprep.exe /generalize /oobe /shutdown /unattend:C:\\Windows\\System32\\Sysprep\\unattend.xml"
-              - "6. When the VM has stopped:  ansible-playbook build_windows_template.yml -e phase=finalize"
+              - "7. When the VM has stopped:  ansible-playbook build_windows_template.yml -e phase=finalize"
 
     # ------------------------------------------------------------ finalize --
     - name: Finalize

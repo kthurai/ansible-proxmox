@@ -103,6 +103,10 @@ Red Hat images need a (free) account, so they can't be downloaded automatically.
    creates VM 9611 with UEFI, Secure Boot, TPM 2.0 and the VirtIO driver ISO, and starts it.
 3. Install Windows in the Proxmox console; the playbook prints the steps
    (load the `vioscsi` driver, install `virtio-win-guest-tools.exe`, run sysprep).
+   Before sysprep, turn off BitLocker, which Windows 11 enables automatically on a VM with a TPM
+   (sysprep fails with "BitLocker is on for the OS volume" otherwise):
+   `reg add HKLM\SYSTEM\CurrentControlSet\Control\BitLocker /v PreventDeviceEncryption /t REG_DWORD /d 1 /f`
+   then `manage-bde -off C:` and wait for *Fully Decrypted*.
 4. After sysprep shuts it down: `ansible-playbook build_windows_template.yml -e phase=finalize`.
 5. With `files/windows/unattend.xml` (the sysprep step downloads it), clones keep your account, get a
    random computer name and boot straight to the login screen. Each clone needs its own Windows licence.
