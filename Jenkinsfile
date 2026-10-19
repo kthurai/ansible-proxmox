@@ -27,7 +27,15 @@ pipeline {
   stages {
     stage('Setup Ansible') {
       steps {
-        sh './setup-venv.sh'
+        script {
+          // Name the build after what it does, e.g. "#11 create rhel10  |  web01"
+          def what = params.ACTION == 'create' ? "create ${params.VM_OS}" : 'destroy'
+          currentBuild.displayName = "#${env.BUILD_NUMBER} ${what}  |  ${params.VM_NAME ?: '(no name)'}"
+          if (params.ACTION == 'create') {
+            currentBuild.description = "${params.VM_CORES} vCPU  |  ${params.VM_MEMORY} MB  |  ${params.VM_DISK_GB} GB  |  IP ${params.VM_IP}"
+          }
+        }
+        sh 'rm -f vm_result.txt && ./setup-venv.sh'
       }
     }
 
@@ -41,6 +49,18 @@ pipeline {
             -e vm_cores="$VM_CORES" -e vm_memory="$VM_MEMORY" -e vm_disk_gb="$VM_DISK_GB" \
             -e vm_ip="$VM_IP" -e vm_gw="$VM_GW"
         '''
+        script {
+          // Show the real VMID / IP / size (after OS minimums) under the build
+          if (fileExists('vm_result.txt')) {
+            def r = [:]
+            for (line in readFile('vm_result.txt').trim().split('\n')) {
+              def kv = line.split('=', 2)
+              r[kv[0]] = kv.size() > 1 ? kv[1] : ''
+            }
+            currentBuild.description = "VMID ${r.vmid}  |  IP ${r.ip ?: 'pending'}  |  " +
+              "${params.VM_CORES} vCPU  |  ${r.memory} MB  |  ${r.disk_gb} GB"
+          }
+        }
       }
     }
 
@@ -52,6 +72,7 @@ pipeline {
           . .venv/bin/activate
           ansible-playbook destroy_vm.yml -e vm_name="$VM_NAME"
         '''
+        script { currentBuild.description = 'VM deleted' }
       }
     }
   }

@@ -2,3 +2,4 @@
 collections/
 *.retry
 __pycache__/
+vm_result.txt

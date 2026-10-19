@@ -131,6 +131,25 @@
       failed_when: false
       when: vm_start | bool
 
+    - name: Work out the IP
+      ansible.builtin.set_fact:
+        vm_found_ip: >-
+          {{ (agent.json.data.result | map(attribute='ip-addresses', default=[]) | flatten
+              | selectattr('ip-address-type', 'eq', 'ipv4')
+              | rejectattr('ip-address', 'match', '^127[.]')
+              | map(attribute='ip-address') | first)
+             if (agent.json is defined and agent.status | default(0) == 200) else '' }}
+
+    - name: Save result for Jenkins (vm_result.txt)
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/vm_result.txt"
+        mode: "0644"
+        content: |
+          vmid={{ new_vmid }}
+          ip={{ vm_found_ip }}
+          memory={{ eff_memory }}
+          disk_gb={{ eff_disk_gb }}
+
     - name: Summary
       vars:
         login_hint: >-
@@ -138,14 +157,10 @@
              if is_windows | bool else
              'Desktop: GNOME installs on first boot (10-20 min, then reboots). Log in on the Proxmox console as '
              ~ vm_ci_user ~ ' with VM_PASSWORD; ssh ' ~ vm_ci_user ~ '@<ip> works meanwhile.'
-             if os_def.vendor_snippet is defined else
-             'Login: ssh ' ~ vm_ci_user ~ '@<ip>' }}
+             if os_def.vendor_snippet is defined and os_def.needs_password | default(false) else
+             'Login: ssh ' ~ vm_ci_user ~ '@' ~ (vm_found_ip or '<ip>') }}
       ansible.builtin.debug:
         msg:
           - "VM {{ vm_name }} (ID {{ new_vmid }}) from {{ vm_os }}"
-          - "IP: {{ (agent.json.data.result | map(attribute='ip-addresses', default=[]) | flatten
-                    | selectattr('ip-address-type', 'eq', 'ipv4')
-                    | rejectattr('ip-address', 'match', '^127\\.')
-                    | map(attribute='ip-address') | first)
-                   if (agent.json is defined and agent.status == 200) else 'not reported yet (check the VM in Proxmox)' }}"
+          - "IP: {{ vm_found_ip or 'not reported yet (check the VM in Proxmox)' }}"
           - "{{ login_hint }}"
