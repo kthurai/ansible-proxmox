@@ -26,12 +26,7 @@ pipeline {
   stages {
     stage('Setup Ansible') {
       steps {
-        sh '''
-          python3 -m venv .venv
-          . .venv/bin/activate
-          pip install -q --upgrade pip ansible-core proxmoxer requests
-          ansible-galaxy collection install -r requirements.yml
-        '''
+        sh './setup-venv.sh'
       }
     }
 
