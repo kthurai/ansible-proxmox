@@ -11,6 +11,7 @@ pipeline {
     string(name: 'VM_IP', defaultValue: 'dhcp', description: "'dhcp' or CIDR, e.g. 192.168.5.80/23")
     string(name: 'VM_GW', defaultValue: '', description: 'Gateway (static IP only)')
     password(name: 'VM_PASSWORD', defaultValue: '', description: "Password for the VM user (required for fedora44ws; optional otherwise)")
+    string(name: 'CONFIRM_DESTROY', defaultValue: '', description: 'destroy only: type the VM name again to confirm')
   }
 
   environment {
@@ -67,7 +68,13 @@ pipeline {
     stage('Destroy VM') {
       when { expression { params.ACTION == 'destroy' } }
       steps {
-        input message: "Really destroy ${params.VM_NAME}?", ok: 'Destroy'
+        script {
+          // Safety check instead of an input prompt: the name must be typed twice.
+          if (!params.VM_NAME?.trim() || params.CONFIRM_DESTROY?.trim() != params.VM_NAME.trim()) {
+            currentBuild.description = 'Not destroyed: CONFIRM_DESTROY did not match VM_NAME'
+            error("Refusing to destroy: type the VM name '${params.VM_NAME}' in CONFIRM_DESTROY as well.")
+          }
+        }
         sh '''
           . .venv/bin/activate
           ansible-playbook destroy_vm.yml -e vm_name="$VM_NAME"
