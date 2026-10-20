@@ -1,9 +1,15 @@
 ---
+# Stop and delete a VM (and its disks).
 #   ansible-playbook destroy_vm.yml -e vm_name=web01
+#   ansible-playbook destroy_vm.yml -e vm_id=105        # by ID (used by Jenkins)
 - name: Destroy VM on Proxmox
   hosts: localhost
   connection: local
   gather_facts: false
+
+  vars:
+    pve_auth_header: "PVEAPIToken={{ pve_api_user }}!{{ pve_api_token_id }}={{ pve_api_token_secret }}"
+    pve_api_url: "https://{{ pve_api_host }}:8006/api2/json"
 
   module_defaults:
     community.proxmox.proxmox_kvm:
@@ -15,21 +21,49 @@
       node: "{{ pve_node }}"
 
   tasks:
-    - name: Refuse to touch templates
+    - name: Need vm_name or vm_id
+      ansible.builtin.assert:
+        that: (vm_name | default('') | length > 0) or (vm_id | default('') | string | length > 0)
+        fail_msg: "Pass -e vm_name=<name> or -e vm_id=<id>."
+
+    - name: Look up the VM
+      ansible.builtin.uri:
+        url: "{{ pve_api_url }}/cluster/resources?type=vm"
+        headers: { Authorization: "{{ pve_auth_header }}" }
+        validate_certs: "{{ pve_validate_certs }}"
+      register: res
+
+    - name: Pick the target
+      ansible.builtin.set_fact:
+        target: >-
+          {{ (res.json.data | selectattr('vmid', 'eq', vm_id | int) | list)
+             if (vm_id | default('') | string | length > 0) else
+             (res.json.data | selectattr('name', 'eq', vm_name) | list) }}
+
+    - name: Exactly one VM must match
+      ansible.builtin.assert:
+        that: target | length == 1
+        fail_msg: >-
+          {{ 'No VM matches ' ~ (vm_id | default(vm_name)) if target | length == 0 else
+             'Several VMs are called ' ~ vm_name ~ ' - use -e vm_id=<id> instead' }}
+
+    - name: Refuse templates and protected VMs
       ansible.builtin.assert:
         that:
-          - vm_name is defined
-          - not vm_name.startswith('tmpl-')
-        fail_msg: "Pass vm_name, and it can't be a template."
+          - not (target[0].template | default(0) | bool)
+          - target[0].name not in protected_vms
+        fail_msg: "{{ target[0].name }} ({{ target[0].vmid }}) is a template or listed in protected_vms - not deleting it."
 
-    - name: Stop {{ vm_name }}
+    - name: Stop {{ target[0].name }} ({{ target[0].vmid }})
       community.proxmox.proxmox_kvm:
-        name: "{{ vm_name }}"
+        vmid: "{{ target[0].vmid }}"
+        node: "{{ target[0].node }}"
         state: stopped
         force: true
         timeout: 120
 
-    - name: Delete {{ vm_name }} and its disks
+    - name: Delete {{ target[0].name }} ({{ target[0].vmid }}) and its disks
       community.proxmox.proxmox_kvm:
-        name: "{{ vm_name }}"
+        vmid: "{{ target[0].vmid }}"
+        node: "{{ target[0].node }}"
         state: absent

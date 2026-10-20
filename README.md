@@ -70,6 +70,10 @@ ansible-playbook create_vm.yml -e vm_name=db01 -e vm_os=rocky10 \
    - `vm-ssh-pubkey`: the SSH public key to put on new VMs
 4. **New Item → Pipeline**, then under *Pipeline script from SCM* point to the repo (script path `Jenkinsfile`).
 5. Run it once (it fails on the first run while Jenkins discovers the parameters), then use **Build with Parameters**.
+6. **Destroy** uses a live drop-down of VMs (`VM_TO_DESTROY`), which needs the **Active Choices** plugin
+   (*Manage Jenkins → Plugins → Available*). Its script reads the Proxmox token, so approve it once under
+   *Manage Jenkins → In-process Script Approval*. Tick **CONFIRM_DESTROY** to actually delete.
+   VMs listed in `protected_vms` (group_vars/all/main.yml) and templates are never offered or deleted.
 
 ## Available OSes
 

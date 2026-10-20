@@ -19,3 +19,9 @@ vm_ci_user: admin
 vm_ssh_pubkey_file: "~/.ssh/id_ed25519.pub"   # on the machine running Ansible
 vm_nameservers: "192.168.4.190 1.1.1.1"
 vm_searchdomain: 325haliburtonhts.com
+
+# ---- Safety ----------------------------------------------------------------
+# VMs that destroy_vm.yml (and the Jenkins destroy list) must never touch.
+# Keep the Jenkins/Ansible server itself in here.
+protected_vms:
+  - Fedora43-srv-01
