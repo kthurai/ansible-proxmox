@@ -44,8 +44,8 @@
       ansible.builtin.assert:
         that: target | length == 1
         fail_msg: >-
-          {{ 'No VM matches ' ~ (vm_id | default(vm_name)) if target | length == 0 else
-             'Several VMs are called ' ~ vm_name ~ ' - use -e vm_id=<id> instead' }}
+          Expected exactly one VM matching {{ vm_id | default(vm_name | default('')) }},
+          found {{ target | length }}. If several VMs share a name, use -e vm_id=<id>.
 
     - name: Refuse templates and protected VMs
       ansible.builtin.assert:
