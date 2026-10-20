@@ -11,7 +11,7 @@ pipeline {
     string(name: 'VM_IP', defaultValue: 'dhcp', description: "'dhcp' or CIDR, e.g. 192.168.5.80/23")
     string(name: 'VM_GW', defaultValue: '', description: 'Gateway (static IP only)')
     password(name: 'VM_PASSWORD', defaultValue: '', description: "Password for the VM user (required for fedora44ws; optional otherwise)")
-    string(name: 'CONFIRM_DESTROY', defaultValue: '', description: 'destroy only: type the VM name again to confirm')
+    booleanParam(name: 'CONFIRM_DESTROY', defaultValue: false, description: 'Tick to confirm deleting VM_NAME (destroy only). Unticked = nothing is deleted.')
   }
 
   environment {
@@ -69,10 +69,14 @@ pipeline {
       when { expression { params.ACTION == 'destroy' } }
       steps {
         script {
-          // Safety check instead of an input prompt: the name must be typed twice.
-          if (!params.VM_NAME?.trim() || params.CONFIRM_DESTROY?.trim() != params.VM_NAME.trim()) {
-            currentBuild.description = 'Not destroyed: CONFIRM_DESTROY did not match VM_NAME'
-            error("Refusing to destroy: type the VM name '${params.VM_NAME}' in CONFIRM_DESTROY as well.")
+          // Safety check instead of an input prompt: the box must be ticked.
+          if (!params.VM_NAME?.trim()) {
+            currentBuild.description = 'Not destroyed: VM_NAME is empty'
+            error('Refusing to destroy: VM_NAME is empty.')
+          }
+          if (!params.CONFIRM_DESTROY) {
+            currentBuild.description = 'Not destroyed: CONFIRM_DESTROY was not ticked'
+            error("Refusing to destroy ${params.VM_NAME}: tick CONFIRM_DESTROY to confirm.")
           }
         }
         sh '''
