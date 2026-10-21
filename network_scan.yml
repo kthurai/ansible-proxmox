@@ -3,17 +3,20 @@
 # device type, services...). Runs on the machine you start it from; that machine
 # must be on the same LAN/Wi-Fi network as the devices (same broadcast domain).
 #
-#   ansible-playbook network_scan.yml -K                    # -K = ask for your sudo password
-#   ansible-playbook network_scan.yml -K -e scan_ports=true # + top-100 open TCP ports (slower)
-#   ansible-playbook network_scan.yml -K -e scan_os=true    # + OS guess (much slower)
+# First time (and after OS upgrades) - installs tools and grants arp-scan/nmap
+# raw-socket access, so later scans need no sudo:
+#   ansible-playbook network_scan.yml -K
+# Afterwards (and from Jenkins):
+#   ansible-playbook network_scan.yml -e scan_setup=false
+# Extras:  -e scan_ports=true (open ports, slower)   -e scan_os=true (OS guess, much slower)
 #
-# Report: reports/network_inventory.xlsx (re-running updates it and keeps your
-# "Friendly name" / "Notes" columns and the first/last-seen history).
+# Report: reports/network_inventory.xlsx. Re-running updates it, keeps first/last-seen
+# history, and the names/notes from files/network/known_devices.yml.
 - name: Home network inventory
   hosts: localhost
   connection: local
   gather_facts: true
-  gather_subset: [min, network]
+  gather_subset: [min]
 
   vars:
     scan_subnet: 192.168.4.0/23
@@ -22,81 +25,91 @@
     scan_retries: 3
     scan_ports: false
     scan_os: false
+    scan_setup: true                 # install tools, set capabilities, open firewall (needs -K)
     scan_open_firewall: true         # let mDNS / UPnP replies through firewalld (needed for names)
     report_file: "{{ playbook_dir }}/reports/network_inventory.xlsx"
-    run_as_user: "{{ lookup('env', 'USER') }}"
+    known_devices: "{{ playbook_dir }}/files/network/known_devices.yml"
     packages:
-      RedHat: [arp-scan, nmap, avahi, avahi-tools, samba-client, bind-utils]
-      Debian: [arp-scan, nmap, avahi-daemon, avahi-utils, samba-common-bin, dnsutils]
+      RedHat: [arp-scan, nmap, avahi, avahi-tools, samba-client, bind-utils, libcap]
+      Debian: [arp-scan, nmap, avahi-daemon, avahi-utils, samba-common-bin, dnsutils, libcap2-bin]
 
   tasks:
-    - name: Install scanning tools
-      become: true
-      ansible.builtin.package:
-        name: "{{ packages[ansible_os_family] }}"
-        state: present
-
     - name: Make sure openpyxl (Excel writer) is in the venv
       ansible.builtin.pip:
         name: openpyxl
         executable: "{{ ansible_playbook_python | dirname }}/pip"
 
-    - name: Start avahi (mDNS) so .local names and smart-device services are seen
-      become: true
-      ansible.builtin.service:
-        name: avahi-daemon
-        state: started
-        enabled: true
-
-    - name: Let mDNS and UPnP replies through the firewall
-      when: scan_open_firewall | bool
+    - name: One-time setup (needs sudo)
+      when: scan_setup | bool
       become: true
       block:
+        - name: Install scanning tools
+          ansible.builtin.package:
+            name: "{{ packages[ansible_os_family] }}"
+            state: present
+
+        - name: Start avahi (mDNS) so .local names and smart-device services are seen
+          ansible.builtin.service:
+            name: avahi-daemon
+            state: started
+            enabled: true
+
+        # Lets any user (incl. jenkins) run ARP / raw scans without sudo.
+        - name: Give arp-scan and nmap raw-socket capability
+          ansible.builtin.shell: |
+            set -e
+            for t in arp-scan nmap; do
+              p=$(command -v $t || echo /usr/sbin/$t)
+              p=$(readlink -f "$p")
+              if ! getcap "$p" | grep -q cap_net_raw; then
+                setcap cap_net_raw,cap_net_admin+eip "$p"; echo "changed $p"
+              fi
+            done
+          args:
+            executable: /bin/bash
+          register: caps
+          changed_when: "'changed' in caps.stdout"
+
         - name: Is firewalld running?
           ansible.builtin.command: firewall-cmd --state
           register: fw
           changed_when: false
           failed_when: false
+          when: scan_open_firewall | bool
 
-        - name: Allow mDNS
-          ansible.builtin.command: firewall-cmd --permanent --add-service=mdns
-          register: fw_mdns
-          changed_when: "'ALREADY_ENABLED' not in fw_mdns.stderr"
-          when: fw.rc == 0
+        - name: Allow mDNS and UPnP/SSDP replies from the LAN
+          when: scan_open_firewall | bool and fw.rc == 0
+          ansible.builtin.shell: |
+            c=0
+            firewall-cmd --permanent --query-service=mdns >/dev/null || { firewall-cmd --permanent --add-service=mdns; c=1; }
+            r='rule family="ipv4" source address="{{ scan_subnet }}" source-port port="1900" protocol="udp" accept'
+            firewall-cmd --permanent --query-rich-rule="$r" >/dev/null || { firewall-cmd --permanent --add-rich-rule="$r"; c=1; }
+            [ $c = 1 ] && firewall-cmd --reload && echo changed || true
+          register: fwr
+          changed_when: "'changed' in fwr.stdout"
 
-        - name: Allow UPnP/SSDP replies from the LAN
-          ansible.builtin.command: >
-            firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="{{ scan_subnet }}"
-            source-port port="1900" protocol="udp" accept'
-          register: fw_ssdp
-          changed_when: "'ALREADY_ENABLED' not in fw_ssdp.stderr"
-          when: fw.rc == 0
+    - name: Report folder
+      ansible.builtin.file:
+        path: "{{ report_file | dirname }}"
+        state: directory
+        mode: "0755"
 
-        - name: Reload firewalld
-          ansible.builtin.command: firewall-cmd --reload
-          when: fw.rc == 0 and (fw_mdns is changed or fw_ssdp is changed)
-
-    - name: Scan the network (takes 1-3 minutes; longer with ports/OS)
-      become: true
+    - name: Scan the network (1-3 minutes; longer with ports/OS)
       ansible.builtin.command:
         argv: "{{ ['' ~ ansible_playbook_python, playbook_dir ~ '/scripts/netscan.py',
                    '--subnet', scan_subnet, '--dns', scan_dns, '--out', report_file,
-                   '--retries', scan_retries | string]
+                   '--retries', scan_retries | string, '--known', known_devices]
                   + (['--iface', scan_iface] if scan_iface else [])
                   + (['--ports'] if scan_ports | bool else [])
                   + (['--os'] if scan_os | bool else []) }}"
       register: scan
       changed_when: true
 
-    - name: Give the report files back to {{ run_as_user }}
-      become: true
-      ansible.builtin.file:
-        path: "{{ item }}"
-        owner: "{{ run_as_user }}"
-      loop:
-        - "{{ report_file | dirname }}"
-        - "{{ report_file }}"
-        - "{{ report_file | splitext | first }}.json"
+    - name: Save a short summary for Jenkins
+      ansible.builtin.copy:
+        content: "{{ scan.stdout_lines | last }}\n"
+        dest: "{{ report_file | dirname }}/last_scan.json"
+        mode: "0644"
 
     - name: Result
       vars:
@@ -104,5 +117,6 @@
       ansible.builtin.debug:
         msg:
           - "Report: {{ r.report }}"
-          - "Online now: {{ r.online }}   remembered offline: {{ r.offline }}"
+          - "Online now: {{ r.online }}   remembered offline: {{ r.offline }}   new: {{ r.new | length }}"
+          - "New devices: {{ r.new | join(', ') if r.new else 'none' }}"
           - "Found per method: {{ r.by_source }}"

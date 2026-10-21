@@ -41,9 +41,11 @@ NOW = dt.datetime.now().replace(microsecond=0)
 # ----------------------------------------------------------------- helpers --
 def run(cmd, timeout=180):
     """Run a command, return stdout ('' if the tool is missing or fails)."""
-    if not shutil.which(cmd[0]):
+    exe = shutil.which(cmd[0]) or shutil.which(cmd[0], path="/usr/sbin:/sbin")
+    if not exe:
         log(f"  - {cmd[0]} not installed, skipping")
         return ""
+    cmd = [exe] + list(cmd[1:])
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
     except (subprocess.TimeoutExpired, OSError) as e:
@@ -397,10 +399,13 @@ def main():
     ap.add_argument("--ports", action="store_true", help="also scan the top 100 TCP ports (slower)")
     ap.add_argument("--os", action="store_true", help="also guess the OS with nmap (much slower)")
     ap.add_argument("--keep-days", type=int, default=90, help="drop devices not seen for this many days")
+    ap.add_argument("--known", default="", help="YAML file: MAC -> {name, notes} (overrides the sheet)")
     a = ap.parse_args()
 
     if os.geteuid() != 0:
-        sys.exit("Run as root (ARP scanning needs raw sockets): sudo " + " ".join(sys.argv))
+        # network_scan.yml's setup gives arp-scan and nmap the raw-socket
+        # capability, so the scan works as a normal user (e.g. Jenkins).
+        os.environ["NMAP_PRIVILEGED"] = "1"
 
     iface = a.iface or default_iface()
     self_ip, self_mac = iface_info(iface)
@@ -408,6 +413,9 @@ def main():
 
     sources = {}
     sources["arp-scan"] = src_arp_scan(iface, a.subnet, a.retries)
+    if not sources["arp-scan"] and os.geteuid() != 0:
+        log("  ! arp-scan found nothing - has the one-time setup run? "
+            "(ansible-playbook network_scan.yml -K)")
     sources["nmap"] = src_nmap_ping(a.subnet, a.dns)
     sources["arp cache"] = src_ip_neigh(a.subnet)
     sources["mDNS"] = src_mdns()
@@ -455,6 +463,12 @@ def main():
     os.makedirs(os.path.dirname(out), exist_ok=True)
     json_path = os.path.splitext(out)[0] + ".json"
     hist = load_previous(json_path, out)
+    known = {}
+    if a.known and os.path.exists(a.known):
+        import yaml
+        with open(a.known) as f:
+            known = {norm_mac(k) or str(k): (v or {}) for k, v in (yaml.safe_load(f) or {}).items()}
+        log(f"* {len(known)} entries in {a.known}")
     now = NOW.isoformat(sep=" ")
     # One row per MAC, so DHCP address changes don't create duplicates - except
     # when one MAC answers for several IPs (Wi-Fi extenders / mesh nodes do this
@@ -475,7 +489,13 @@ def main():
             "private_mac": "yes" if is_private_mac(d["mac"]) else "", "found_by": ", ".join(d["found_by"]),
             "last_seen": now, "online": True,
         })
+        h["new"] = h["first_seen"] == now
         hist[key] = h
+    for key, h in hist.items():
+        k = known.get(h.get("mac")) or known.get(h.get("ip"))
+        if k:
+            h["friendly_user"] = k.get("name", h.get("friendly_user", ""))
+            h["notes"] = k.get("notes", h.get("notes", ""))
     cutoff = NOW - dt.timedelta(days=a.keep_days)
     for key in list(hist):
         if hist[key].get("last_seen", now) != now:
@@ -487,8 +507,10 @@ def main():
 
     write_xlsx(out, hist, a, self_ip, iface)
     online = sum(1 for h in hist.values() if h["online"])
-    log(f"\n{online} devices online, {len(hist) - online} remembered offline -> {out}")
-    print(json.dumps({"report": out, "online": online, "offline": len(hist) - online,
+    new = [f"{h['ip']} {h['hostname'] or h['vendor'] or h['mac']}".strip()
+           for h in hist.values() if h.get("new") and h["online"]]
+    log(f"\n{online} devices online, {len(hist) - online} remembered offline, {len(new)} new -> {out}")
+    print(json.dumps({"report": out, "online": online, "offline": len(hist) - online, "new": new,
                       "by_source": {k: len(v) for k, v in sources.items()}}))
 
 
@@ -503,6 +525,7 @@ def write_xlsx(path, hist, a, self_ip, iface):
     head_fill = PatternFill("solid", fgColor="1F3864")
     yours_fill = PatternFill("solid", fgColor="FFF2CC")
     off_font = Font(color="808080", italic=True)
+    new_fill = PatternFill("solid", fgColor="C6EFCE")
     ws.append([c for c, _ in COLUMNS])
     for i, (_, w) in enumerate(COLUMNS, 1):
         cell = ws.cell(row=1, column=i)
@@ -512,16 +535,19 @@ def write_xlsx(path, hist, a, self_ip, iface):
         ws.column_dimensions[get_column_letter(i)].width = w
     ws.row_dimensions[1].height = 30
 
-    rows = sorted(hist.values(), key=lambda h: (not h["online"], ip_key(h["ip"])))
+    rows = sorted(hist.values(), key=lambda h: (not h["online"], not h.get("new"), ip_key(h["ip"])))
     for h in rows:
         ws.append([
-            "online" if h["online"] else "offline", h["ip"], h["hostname"], h["mac"], h["vendor"], h["type"],
+            ("NEW" if h.get("new") else "online") if h["online"] else "offline", h["ip"], h["hostname"], h["mac"], h["vendor"], h["type"],
             h.get("friendly_user", ""), h.get("notes", ""), h["mdns"], h["dns"], h["netbios"], h["upnp"],
             h["services"], h["ports"], h["os"], h["private_mac"], h["found_by"], h["first_seen"], h["last_seen"],
         ])
         r = ws.max_row
         for col in (7, 8):
             ws.cell(row=r, column=col).fill = yours_fill
+        if h.get("new") and h["online"]:
+            ws.cell(row=r, column=1).fill = new_fill
+            ws.cell(row=r, column=1).font = Font(bold=True)
         if not h["online"]:
             for col in range(1, len(COLUMNS) + 1):
                 ws.cell(row=r, column=col).font = off_font

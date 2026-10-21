@@ -122,18 +122,29 @@ Red Hat images need a (free) account, so they can't be downloaded automatically.
 ## Network inventory (Excel)
 
 Finds every device on the LAN - including smart devices that ignore ping - and
-writes `reports/network_inventory.xlsx` with IP, MAC, hostname, vendor, a device-type
-guess, mDNS/UPnP names and models, and first/last-seen dates.
+writes an Excel sheet with IP, MAC, hostname, vendor, a device-type guess, mDNS/UPnP
+names and models, and first/last-seen dates. New devices are marked **NEW** at the top.
 
 ```bash
-ansible-playbook network_scan.yml -K                     # -K asks for your sudo password
-ansible-playbook network_scan.yml -K -e scan_ports=true  # + open ports (slower)
+ansible-playbook network_scan.yml -K                         # first time: installs tools + scans
+ansible-playbook network_scan.yml -e scan_setup=false        # afterwards: no sudo needed
+ansible-playbook network_scan.yml -e scan_setup=false -e scan_ports=true   # + open ports
 ```
 
 Run it from a machine on the same network as the devices (the Jenkins server works).
 It combines ARP sweeps (arp-scan, nmap), mDNS, UPnP/SSDP, reverse DNS and NetBIOS.
-Re-running updates the sheet: devices that disappear are kept as *offline* for 90 days,
-and whatever you type in the yellow *Friendly name* / *Notes* columns is preserved.
+Devices that disappear are kept as *offline* for 90 days. Give devices names and notes
+in `files/network/known_devices.yml` (by MAC) - they show up in every report.
+
+### Nightly Jenkins job
+
+1. Run the first-time command above once on the Jenkins server (sets up the tools and lets
+   `arp-scan`/`nmap` scan without sudo).
+2. **New Item → Pipeline** named `network-scan`, *Pipeline script from SCM*, this repo,
+   branch `*/main`, **Script Path `Jenkinsfile.netscan`**.
+3. It runs every night around 02:00 (or *Build Now*). Each build attaches
+   `network_inventory.xlsx` and shows online/offline/new counts in its description.
+   History is kept in `$JENKINS_HOME/network-inventory/`.
 
 ## Adding another OS
 

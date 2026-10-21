@@ -1,0 +1,13 @@
+---
+# Friendly names and notes for devices on your network, by MAC address.
+# They appear in the "Friendly name (yours)" / "Notes (yours)" columns of the
+# network inventory, and survive every scan (including the nightly Jenkins one).
+# Get MACs from the spreadsheet. Lower or upper case, ':' or '-' both work.
+#
+# "aa:bb:cc:dd:ee:ff":
+#   name: Living room TV
+#   notes: wall-mounted, ethernet
+#
+# Devices without a MAC (rare) can be listed by IP instead:
+# "192.168.4.80":
+#   name: Office printer

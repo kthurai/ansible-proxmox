@@ -1,0 +1,77 @@
+// Nightly home-network inventory -> Excel (network_scan.yml).
+// Jenkins job: Pipeline from SCM, Script Path = Jenkinsfile.netscan
+// Prerequisite (once, on the Jenkins server, as a sudo user):
+//   ansible-playbook network_scan.yml -K
+pipeline {
+  agent any
+
+  triggers {
+    cron('H 2 * * *')          // every night around 02:00
+  }
+
+  parameters {
+    booleanParam(name: 'SCAN_PORTS', defaultValue: false, description: 'Also list open TCP ports (top 100) - slower')
+    booleanParam(name: 'SCAN_OS',    defaultValue: false, description: 'Also guess each device\'s OS - much slower')
+  }
+
+  options {
+    disableConcurrentBuilds()
+    timestamps()
+    buildDiscarder(logRotator(numToKeepStr: '60'))
+  }
+
+  environment {
+    // Outside the workspace so history survives workspace clean-ups
+    INVENTORY_DIR = "${JENKINS_HOME}/network-inventory"
+    ANSIBLE_FORCE_COLOR = 'true'
+  }
+
+  stages {
+    stage('Setup Ansible') {
+      steps {
+        sh './setup-venv.sh'
+      }
+    }
+
+    stage('Scan network') {
+      steps {
+        sh '''
+          . .venv/bin/activate
+          ansible-playbook network_scan.yml -e scan_setup=false \
+            -e report_file="$INVENTORY_DIR/network_inventory.xlsx" \
+            -e scan_ports="$SCAN_PORTS" -e scan_os="$SCAN_OS"
+
+          # Copy the report into the workspace so it can be attached to the build,
+          # and turn the JSON summary into simple key=value lines for the description.
+          rm -rf reports && mkdir -p reports
+          cp "$INVENTORY_DIR/network_inventory.xlsx" reports/
+          .venv/bin/python - "$INVENTORY_DIR/last_scan.json" > reports/summary.txt <<'PY'
+import json, sys
+r = json.load(open(sys.argv[1]))
+print(f"online={r['online']}")
+print(f"offline={r['offline']}")
+print(f"new={len(r['new'])}")
+print(f"new_list={'; '.join(r['new'][:5])}{' ...' if len(r['new']) > 5 else ''}")
+PY
+        '''
+        script {
+          def r = [:]
+          for (line in readFile('reports/summary.txt').trim().split('\n')) {
+            def kv = line.split('=', 2)
+            r[kv[0]] = kv.size() > 1 ? kv[1] : ''
+          }
+          currentBuild.displayName = "#${env.BUILD_NUMBER} scan  |  ${r.online} online" +
+            (r.new != '0' ? "  |  ${r.new} NEW" : '')
+          currentBuild.description = "${r.online} online  |  ${r.offline} offline" +
+            (r.new != '0' ? "  |  new: ${r.new_list}" : '')
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      archiveArtifacts artifacts: 'reports/network_inventory.xlsx', allowEmptyArchive: true, fingerprint: false
+    }
+  }
+}
