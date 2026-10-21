@@ -11,6 +11,8 @@ group_vars/all/main.yml         Proxmox host, storage, bridge, cloud-init defaul
 group_vars/all/os_catalog.yml   available OSes + template IDs + image URLs
 files/snippets/       cloud-init first-boot scripts (e.g. Fedora Workstation desktop)
 Jenkinsfile           parameterized create/destroy job
+network_scan.yml      scan the home network -> reports/network_inventory.xlsx
+scripts/netscan.py    the scanner network_scan.yml runs
 setup-venv.sh         creates .venv + installs Ansible, proxmoxer, collections
 requirements.txt      Python packages for the venv
 ```
@@ -116,6 +118,22 @@ Red Hat images need a (free) account, so they can't be downloaded automatically.
    random computer name and boot straight to the login screen. Each clone needs its own Windows licence.
 6. To re-make the template from another VM (e.g. a clone you updated and sysprepped):
    `ansible-playbook build_windows_template.yml -e phase=finalize -e from_vmid=<id>`
+
+## Network inventory (Excel)
+
+Finds every device on the LAN - including smart devices that ignore ping - and
+writes `reports/network_inventory.xlsx` with IP, MAC, hostname, vendor, a device-type
+guess, mDNS/UPnP names and models, and first/last-seen dates.
+
+```bash
+ansible-playbook network_scan.yml -K                     # -K asks for your sudo password
+ansible-playbook network_scan.yml -K -e scan_ports=true  # + open ports (slower)
+```
+
+Run it from a machine on the same network as the devices (the Jenkins server works).
+It combines ARP sweeps (arp-scan, nmap), mDNS, UPnP/SSDP, reverse DNS and NetBIOS.
+Re-running updates the sheet: devices that disappear are kept as *offline* for 90 days,
+and whatever you type in the yellow *Friendly name* / *Notes* columns is preserved.
 
 ## Adding another OS
 

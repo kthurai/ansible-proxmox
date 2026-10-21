@@ -1,0 +1,108 @@
+---
+# Scan the home network and write an Excel inventory (hostname, MAC, IP, vendor,
+# device type, services...). Runs on the machine you start it from; that machine
+# must be on the same LAN/Wi-Fi network as the devices (same broadcast domain).
+#
+#   ansible-playbook network_scan.yml -K                    # -K = ask for your sudo password
+#   ansible-playbook network_scan.yml -K -e scan_ports=true # + top-100 open TCP ports (slower)
+#   ansible-playbook network_scan.yml -K -e scan_os=true    # + OS guess (much slower)
+#
+# Report: reports/network_inventory.xlsx (re-running updates it and keeps your
+# "Friendly name" / "Notes" columns and the first/last-seen history).
+- name: Home network inventory
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  gather_subset: [min, network]
+
+  vars:
+    scan_subnet: 192.168.4.0/23
+    scan_dns: 192.168.4.190          # router / Pi-hole that knows device names ('' = system default)
+    scan_iface: ""                   # '' = interface with the default route
+    scan_retries: 3
+    scan_ports: false
+    scan_os: false
+    scan_open_firewall: true         # let mDNS / UPnP replies through firewalld (needed for names)
+    report_file: "{{ playbook_dir }}/reports/network_inventory.xlsx"
+    run_as_user: "{{ lookup('env', 'USER') }}"
+    packages:
+      RedHat: [arp-scan, nmap, avahi, avahi-tools, samba-client, bind-utils]
+      Debian: [arp-scan, nmap, avahi-daemon, avahi-utils, samba-common-bin, dnsutils]
+
+  tasks:
+    - name: Install scanning tools
+      become: true
+      ansible.builtin.package:
+        name: "{{ packages[ansible_os_family] }}"
+        state: present
+
+    - name: Make sure openpyxl (Excel writer) is in the venv
+      ansible.builtin.pip:
+        name: openpyxl
+        executable: "{{ ansible_playbook_python | dirname }}/pip"
+
+    - name: Start avahi (mDNS) so .local names and smart-device services are seen
+      become: true
+      ansible.builtin.service:
+        name: avahi-daemon
+        state: started
+        enabled: true
+
+    - name: Let mDNS and UPnP replies through the firewall
+      when: scan_open_firewall | bool
+      become: true
+      block:
+        - name: Is firewalld running?
+          ansible.builtin.command: firewall-cmd --state
+          register: fw
+          changed_when: false
+          failed_when: false
+
+        - name: Allow mDNS
+          ansible.builtin.command: firewall-cmd --permanent --add-service=mdns
+          register: fw_mdns
+          changed_when: "'ALREADY_ENABLED' not in fw_mdns.stderr"
+          when: fw.rc == 0
+
+        - name: Allow UPnP/SSDP replies from the LAN
+          ansible.builtin.command: >
+            firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="{{ scan_subnet }}"
+            source-port port="1900" protocol="udp" accept'
+          register: fw_ssdp
+          changed_when: "'ALREADY_ENABLED' not in fw_ssdp.stderr"
+          when: fw.rc == 0
+
+        - name: Reload firewalld
+          ansible.builtin.command: firewall-cmd --reload
+          when: fw.rc == 0 and (fw_mdns is changed or fw_ssdp is changed)
+
+    - name: Scan the network (takes 1-3 minutes; longer with ports/OS)
+      become: true
+      ansible.builtin.command:
+        argv: "{{ ['' ~ ansible_playbook_python, playbook_dir ~ '/scripts/netscan.py',
+                   '--subnet', scan_subnet, '--dns', scan_dns, '--out', report_file,
+                   '--retries', scan_retries | string]
+                  + (['--iface', scan_iface] if scan_iface else [])
+                  + (['--ports'] if scan_ports | bool else [])
+                  + (['--os'] if scan_os | bool else []) }}"
+      register: scan
+      changed_when: true
+
+    - name: Give the report files back to {{ run_as_user }}
+      become: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        owner: "{{ run_as_user }}"
+      loop:
+        - "{{ report_file | dirname }}"
+        - "{{ report_file }}"
+        - "{{ report_file | splitext | first }}.json"
+
+    - name: Result
+      vars:
+        r: "{{ scan.stdout_lines | last | from_json }}"
+      ansible.builtin.debug:
+        msg:
+          - "Report: {{ r.report }}"
+          - "Online now: {{ r.online }}   remembered offline: {{ r.offline }}"
+          - "Found per method: {{ r.by_source }}"
