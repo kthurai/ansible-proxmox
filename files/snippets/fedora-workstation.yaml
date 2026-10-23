@@ -2,4 +2,6 @@
 # Vendor-data for tmpl-fedora44ws: turns Fedora Cloud into Fedora Workstation
 # on first boot. Proxmox still supplies the user, SSH key, password and network.
 runcmd:
+  # The cloud image names the default user "Fedora Cloud User"; show the login name instead.
+  - [sh, -c, "u=$(getent passwd 1000 | cut -d: -f1); [ -n \"$u\" ] && usermod -c \"$u\" \"$u\" || true"]
   - [sh, -c, "dnf -y install @workstation-product-environment && systemctl set-default graphical.target && systemctl reboot"]
