@@ -3,6 +3,7 @@
 #
 # 1. Create a VM, e.g. Jenkins proxmox-vm: debian13, 2 vCPU, 4096 MB, 40 GB
 # 2. ansible-playbook deploy_docmost.yml -e docmost_host=<vm-ip>
+#    or on this machine itself:  ansible-playbook deploy_docmost.yml -e docmost_host=localhost -K
 # 3. Open http://<vm-ip>:3000 and create the first (admin) account.
 #
 # Re-running is safe: it keeps the generated secrets and your data, and pulls
@@ -17,11 +18,16 @@
         that: docmost_host is defined and docmost_host | length > 0
         fail_msg: "Pass -e docmost_host=<vm-ip>"
 
-    - name: Target
+    - name: Target (a remote VM over SSH, or this machine for localhost)
+      vars:
+        is_local: "{{ docmost_host in ['localhost', '127.0.0.1'] }}"
       ansible.builtin.add_host:
         name: "{{ docmost_host }}"
         groups: docmost
-        ansible_user: "{{ docmost_ssh_user | default(vm_ci_user) }}"
+        ansible_connection: "{{ 'local' if is_local | bool else 'ssh' }}"
+        ansible_user: "{{ omit if is_local | bool else docmost_ssh_user | default(vm_ci_user) }}"
+        # system Python (not the venv) so the dnf/apt modules work locally
+        ansible_python_interpreter: "{{ '/usr/bin/python3' if is_local | bool else 'auto_silent' }}"
 
 - name: Install Docker and Docmost
   hosts: docmost
@@ -29,7 +35,9 @@
   vars:
     docmost_dir: /opt/docmost
     docmost_port: 3000
-    docmost_url: "http://{{ inventory_hostname }}:{{ docmost_port }}"
+    docmost_url: >-
+      http://{{ ansible_default_ipv4.address if inventory_hostname in ['localhost', '127.0.0.1']
+      else inventory_hostname }}:{{ docmost_port }}
     docmost_image: docmost/docmost:latest
     docmost_postgres_image: postgres:18
     docmost_redis_image: redis:8
@@ -66,6 +74,11 @@
     - name: Docker on Fedora / RHEL family
       when: ansible_os_family == 'RedHat'
       block:
+        - name: Remove podman-docker shim (conflicts with docker-ce)
+          ansible.builtin.dnf:
+            name: podman-docker
+            state: absent
+
         - name: Docker dnf repository
           ansible.builtin.get_url:
             url: "https://download.docker.com/linux/{{ docker_repo_os }}/docker-ce.repo"
