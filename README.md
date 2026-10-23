@@ -12,6 +12,7 @@ group_vars/all/os_catalog.yml   available OSes + template IDs + image URLs
 files/snippets/       cloud-init first-boot scripts (e.g. Fedora Workstation desktop)
 Jenkinsfile           parameterized create/destroy job
 network_scan.yml      scan the home network -> reports/network_inventory.xlsx
+deploy_docmost.yml    Docker + Docmost wiki (open-source Confluence alternative) on a VM
 scripts/netscan.py    the scanner network_scan.yml runs
 setup-venv.sh         creates .venv + installs Ansible, proxmoxer, collections
 requirements.txt      Python packages for the venv
@@ -145,6 +146,19 @@ in `files/network/known_devices.yml` (by MAC) - they show up in every report.
 3. It runs every night around 02:00 (or *Build Now*). Each build attaches
    `network_inventory.xlsx` and shows online/offline/new counts in its description.
    History is kept in `$JENKINS_HOME/network-inventory/`.
+
+## Docmost wiki
+
+[Docmost](https://docmost.com) is an open-source, Confluence-style wiki (spaces, pages,
+real-time co-editing, comments; imports from Confluence/Notion).
+
+1. Create a VM (Jenkins `proxmox-vm`): `debian13`, 2 vCPU, 4096 MB, 40 GB.
+2. `ansible-playbook deploy_docmost.yml -e docmost_host=<vm-ip>`
+3. Open `http://<vm-ip>:3000` and create the first account - it becomes the admin.
+
+Installs Docker, runs Docmost + PostgreSQL + Redis with Docker Compose in `/opt/docmost`,
+generates secrets once (kept in `/opt/docmost/.env`), and backs up the database and
+uploads nightly to `/opt/docmost/backups` (14 days). Upgrade later with `-e docmost_pull=true`.
 
 ## Adding another OS
 

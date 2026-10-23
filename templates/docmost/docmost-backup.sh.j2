@@ -1,0 +1,11 @@
+#!/bin/sh
+# Nightly Docmost backup (database + uploaded files). Managed by Ansible.
+set -eu
+cd {{ docmost_dir }}
+dest={{ docmost_dir }}/backups
+stamp=$(date +%Y%m%d-%H%M)
+mkdir -p "$dest"
+docker compose exec -T db pg_dump -U docmost docmost | gzip > "$dest/db-$stamp.sql.gz"
+docker run --rm -v "$(basename {{ docmost_dir }})_docmost:/data:ro" -v "$dest:/backup" \
+  alpine tar czf "/backup/files-$stamp.tar.gz" -C /data .
+find "$dest" -type f -mtime +{{ docmost_backup_keep_days }} -delete

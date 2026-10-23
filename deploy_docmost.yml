@@ -1,0 +1,171 @@
+---
+# Deploy Docmost (open-source Confluence/Notion-style wiki) with Docker on a VM.
+#
+# 1. Create a VM, e.g. Jenkins proxmox-vm: debian13, 2 vCPU, 4096 MB, 40 GB
+# 2. ansible-playbook deploy_docmost.yml -e docmost_host=<vm-ip>
+# 3. Open http://<vm-ip>:3000 and create the first (admin) account.
+#
+# Re-running is safe: it keeps the generated secrets and your data, and pulls
+# newer images (-e docmost_pull=true to upgrade).
+- name: Add the target VM
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Need docmost_host
+      ansible.builtin.assert:
+        that: docmost_host is defined and docmost_host | length > 0
+        fail_msg: "Pass -e docmost_host=<vm-ip>"
+
+    - name: Target
+      ansible.builtin.add_host:
+        name: "{{ docmost_host }}"
+        groups: docmost
+        ansible_user: "{{ docmost_ssh_user | default(vm_ci_user) }}"
+
+- name: Install Docker and Docmost
+  hosts: docmost
+  become: true
+  vars:
+    docmost_dir: /opt/docmost
+    docmost_port: 3000
+    docmost_url: "http://{{ inventory_hostname }}:{{ docmost_port }}"
+    docmost_image: docmost/docmost:latest
+    docmost_postgres_image: postgres:18
+    docmost_redis_image: redis:8
+    docmost_pull: false
+    docmost_backup_keep_days: 14
+    docker_repo_os: >-
+      {{ 'fedora' if ansible_distribution == 'Fedora' else
+         'rhel' if ansible_os_family == 'RedHat' else ansible_distribution | lower }}
+
+  tasks:
+    # ---------------------------------------------------------------- docker --
+    - name: Docker on Debian / Ubuntu
+      when: ansible_os_family == 'Debian'
+      block:
+        - name: Prerequisites
+          ansible.builtin.apt:
+            name: [ca-certificates, curl]
+            update_cache: true
+
+        - name: Docker apt repository
+          ansible.builtin.deb822_repository:
+            name: docker
+            types: deb
+            uris: "https://download.docker.com/linux/{{ docker_repo_os }}"
+            suites: "{{ ansible_distribution_release }}"
+            components: stable
+            signed_by: "https://download.docker.com/linux/{{ docker_repo_os }}/gpg"
+
+        - name: Install Docker
+          ansible.builtin.apt:
+            name: [docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin]
+            update_cache: true
+
+    - name: Docker on Fedora / RHEL family
+      when: ansible_os_family == 'RedHat'
+      block:
+        - name: Docker dnf repository
+          ansible.builtin.get_url:
+            url: "https://download.docker.com/linux/{{ docker_repo_os }}/docker-ce.repo"
+            dest: /etc/yum.repos.d/docker-ce.repo
+            mode: "0644"
+
+        - name: Install Docker
+          ansible.builtin.dnf:
+            name: [docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin]
+
+    - name: Start Docker
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    # --------------------------------------------------------------- secrets --
+    - name: Docmost folder
+      ansible.builtin.file:
+        path: "{{ docmost_dir }}"
+        state: directory
+        mode: "0750"
+
+    - name: Existing secrets?
+      ansible.builtin.stat:
+        path: "{{ docmost_dir }}/.env"
+      register: envfile
+
+    - name: Generate secrets (first run only - kept on re-runs)
+      ansible.builtin.copy:
+        dest: "{{ docmost_dir }}/.env"
+        mode: "0600"
+        content: |
+          APP_SECRET={{ lookup('password', '/dev/null length=64 chars=hexdigits') }}
+          POSTGRES_PASSWORD={{ lookup('password', '/dev/null length=32 chars=ascii_letters,digits') }}
+      when: not envfile.stat.exists
+      no_log: true
+
+    # ---------------------------------------------------------------- deploy --
+    - name: docker-compose.yml
+      ansible.builtin.template:
+        src: templates/docmost/docker-compose.yml.j2
+        dest: "{{ docmost_dir }}/docker-compose.yml"
+        mode: "0640"
+      register: compose
+
+    - name: Pull newer images
+      ansible.builtin.command: docker compose pull
+      args:
+        chdir: "{{ docmost_dir }}"
+      when: docmost_pull | bool
+      changed_when: true
+
+    - name: Start Docmost
+      ansible.builtin.command: docker compose up -d --remove-orphans
+      args:
+        chdir: "{{ docmost_dir }}"
+      register: up
+      changed_when: "'Started' in up.stderr or 'Recreated' in up.stderr or 'Created' in up.stderr"
+
+    - name: Open port {{ docmost_port }} in firewalld (if running)
+      ansible.builtin.shell: |
+        command -v firewall-cmd >/dev/null && firewall-cmd --state >/dev/null 2>&1 || exit 0
+        firewall-cmd --permanent --query-port={{ docmost_port }}/tcp >/dev/null && exit 0
+        firewall-cmd --permanent --add-port={{ docmost_port }}/tcp && firewall-cmd --reload && echo changed
+      register: fw
+      changed_when: "'changed' in fw.stdout"
+
+    # ---------------------------------------------------------------- backup --
+    - name: Backup script
+      ansible.builtin.template:
+        src: templates/docmost/docmost-backup.sh.j2
+        dest: /usr/local/bin/docmost-backup
+        mode: "0750"
+
+    - name: cron installed (Debian cloud images ship without it)
+      ansible.builtin.package:
+        name: "{{ 'cron' if ansible_os_family == 'Debian' else 'cronie' }}"
+
+    - name: Nightly backup at 03:30 (kept {{ docmost_backup_keep_days }} days in {{ docmost_dir }}/backups)
+      ansible.builtin.cron:
+        name: docmost-backup
+        hour: "3"
+        minute: "30"
+        job: /usr/local/bin/docmost-backup >> /var/log/docmost-backup.log 2>&1
+        cron_file: docmost-backup
+        user: root
+
+    # ----------------------------------------------------------------- check --
+    - name: Wait until Docmost is healthy (first start can take a minute)
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ docmost_port }}/api/health"
+      register: health
+      until: health.status == 200
+      retries: 30
+      delay: 5
+
+    - name: Done
+      ansible.builtin.debug:
+        msg:
+          - "Docmost is running: {{ docmost_url }}"
+          - "Open it and create the first account - that account becomes the workspace owner/admin."
+          - "Backups: nightly to {{ docmost_dir }}/backups (run now: sudo docmost-backup)"
